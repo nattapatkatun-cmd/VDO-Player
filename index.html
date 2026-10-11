@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1013">
+<title>Video Player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<style>
+  :root{
+    --bg:#0e1013; --surface:#171a1f; --raised:#1f242b; --line:#2a3039;
+    --text:#e8eaed; --muted:#8b93a1; --accent:#ffb224; --accent-ink:#1a1200; --danger:#ff6b5e;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:"IBM Plex Sans Thai",system-ui,-apple-system,"Segoe UI",sans-serif;
+    font-size:15px; line-height:1.5;
+    padding:16px max(16px,env(safe-area-inset-right)) 32px max(16px,env(safe-area-inset-left));
+  }
+  button,select,input{font:inherit;color:inherit}
+  button{cursor:pointer}
+  .app{max-width:1240px;margin:0 auto;display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
+  @media (min-width:960px){.app{grid-template-columns:minmax(0,1fr) 340px;align-items:start}}
+
+  header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  h1{font-size:17px;font-weight:600;margin:0;letter-spacing:.01em}
+  h1 span{color:var(--accent)}
+  #meta{color:var(--muted);font-size:13px;text-align:right;font-variant-numeric:tabular-nums}
+
+  /* ---------- stage ---------- */
+  #stage{
+    position:relative;width:100%;aspect-ratio:16/9;max-height:72vh;
+    background:#000;border-radius:var(--radius);overflow:hidden;
+    display:grid;place-items:center;
+  }
+  #stage:fullscreen{width:100vw;height:100vh;max-height:none;aspect-ratio:auto;border-radius:0}
+  #stage:-webkit-full-screen{width:100vw;height:100vh;max-height:none;aspect-ratio:auto;border-radius:0}
+  #frame{position:relative;width:100%;height:100%;overflow:hidden}
+  #sub{
+    position:absolute;left:5%;right:5%;bottom:12%;text-align:center;pointer-events:none;
+    color:#fff;font-weight:500;line-height:1.35;white-space:pre-line;overflow-wrap:anywhere;
+    text-shadow:0 0 3px #000,0 0 3px #000,1px 1px 2px #000,-1px -1px 2px #000,1px -1px 2px #000,-1px 1px 2px #000;
+  }
+  #sub:empty{display:none}
+  video{width:100%;height:100%;display:block;background:#000;object-fit:contain}
+  .overlay{
+    position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;
+    background:#000;color:var(--muted);
+  }
+  .overlay[hidden]{display:none}
+  .overlay strong{display:block;color:var(--text);font-weight:500;font-size:16px;margin-bottom:6px}
+  #err{background:rgba(0,0,0,.82);color:var(--text);pointer-events:none}
+  #err strong{color:var(--danger)}
+
+  /* ---------- controls ---------- */
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+  main,.side{min-width:0}
+  .stack{display:grid;gap:12px;margin-top:12px;grid-template-columns:minmax(0,1fr)}
+  .panel{min-width:0}
+  .label{font-size:12px;color:var(--muted);margin-bottom:6px;letter-spacing:.03em}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+  .field{flex:1 1 130px;min-width:0}
+  select,input[type=url]{
+    width:100%;height:42px;background:var(--raised);border:1px solid var(--line);
+    border-radius:8px;padding:0 10px;font-size:16px;
+  }
+  select:disabled{opacity:.55}
+  .btn{
+    height:42px;padding:0 14px;border-radius:8px;border:1px solid var(--line);
+    background:var(--raised);white-space:nowrap;
+  }
+  .btn:hover{border-color:#3a424e}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+  .btn.icon{width:42px;padding:0;font-size:17px}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{
+    flex:none;height:36px;padding:0 13px;border-radius:999px;border:1px solid var(--line);
+    background:var(--raised);font-size:14px;
+  }
+  .chip[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+
+  .sliders{display:grid;gap:10px 18px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .slider{display:grid;grid-template-columns:86px 1fr 42px;align-items:center;gap:8px;font-size:14px}
+  .slider output{color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+  input[type=range]{width:100%;accent-color:var(--accent);height:28px}
+  .slider.wide{grid-template-columns:104px minmax(0,1fr) 62px}
+  .stepper{display:flex;gap:6px;flex-wrap:wrap}
+  .stepper .btn{height:36px;padding:0 10px;font-size:14px;font-variant-numeric:tabular-nums}
+  .btn:disabled{opacity:.45;cursor:default}
+  .btn[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+  .hint{color:var(--muted);font-size:13px;margin:8px 0 0}
+  details summary{cursor:pointer;font-weight:500;list-style:none;display:flex;justify-content:space-between;align-items:center}
+  details summary::-webkit-details-marker{display:none}
+  details summary::after{content:"▾";color:var(--muted)}
+  details[open] summary::after{content:"▴"}
+  details[open] summary{margin-bottom:12px}
+
+  /* ---------- playlist ---------- */
+  .side h2{font-size:15px;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}
+  .side h2 small{color:var(--muted);font-weight:400;font-size:13px}
+  #drop{
+    border:1.5px dashed var(--line);border-radius:10px;padding:14px;text-align:center;color:var(--muted);font-size:14px;
+  }
+  body.dragging #drop{border-color:var(--accent);color:var(--text)}
+  #drop .btn{margin-top:8px;width:100%}
+  .urlrow{display:flex;gap:8px;margin-top:10px}
+  .urlrow input{flex:1;min-width:0}
+  #list{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:6px;max-height:52vh;overflow:auto}
+  #list li{
+    display:grid;grid-template-columns:26px minmax(0,1fr) 34px;align-items:center;gap:8px;
+    background:var(--raised);border:1px solid transparent;border-radius:8px;padding:8px 6px 8px 10px;cursor:pointer;
+  }
+  #list li:hover{border-color:var(--line)}
+  #list li.on{border-color:var(--accent)}
+  #list .n{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+  #list li.on .n{color:var(--accent)}
+  #list .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+  #list .k{display:block;color:var(--muted);font-size:12px}
+  #list .x{width:34px;height:34px;border:0;background:none;color:var(--muted);border-radius:6px;font-size:16px}
+  #list .x:hover{color:var(--danger);background:rgba(255,107,94,.1)}
+  #empty{color:var(--muted);font-size:14px;margin:12px 0 0}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="sharp" color-interpolation-filters="sRGB">
+    <feConvolveMatrix id="kernel" order="3" preserveAlpha="true" kernelMatrix="0 0 0 0 1 0 0 0 0"/>
+  </filter>
+</svg>
+
+<div class="app">
+  <header>
+    <h1><span>▶</span> Video Player</h1>
+    <div id="meta"></div>
+  </header>
+
+  <main>
+    <div id="stage">
+      <div id="frame">
+        <video id="v" controls playsinline preload="metadata" controlslist="nofullscreen"></video>
+        <div id="sub" aria-live="off"></div>
+      </div>
+      <div class="overlay" id="blank">
+        <div><strong>ยังไม่มีวิดีโอ</strong>เพิ่มไฟล์หรือวางลิงก์เพื่อเริ่มเล่น</div>
+      </div>
+      <div class="overlay" id="err" hidden>
+        <div><strong>เล่นวิดีโอนี้ไม่ได้</strong><span id="errmsg"></span></div>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="panel">
+        <div class="label">อัตราส่วนจอ</div>
+        <div class="chips" id="ratios"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <div class="field">
+            <div class="label">ความละเอียด</div>
+            <select id="quality" disabled><option>ต้นฉบับ</option></select>
+          </div>
+          <div class="field">
+            <div class="label">ความเร็ว</div>
+            <select id="speed">
+              <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+              <option value="1" selected>1×</option><option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option><option value="2">2×</option>
+            </select>
+          </div>
+          <button class="btn icon" id="prev" title="ก่อนหน้า" aria-label="ก่อนหน้า">⏮</button>
+          <button class="btn icon" id="next" title="ถัดไป" aria-label="ถัดไป">⏭</button>
+          <button class="btn" id="fs">เต็มจอ</button>
+        </div>
+        <p class="hint" id="qhint"></p>
+      </div>
+
+      <div class="panel">
+        <div class="label">ซับไตเติล</div>
+        <div class="row">
+          <button class="btn primary" id="subpick">เลือกไฟล์ซับ</button>
+          <input type="file" id="subfile" multiple hidden>
+          <button class="btn" id="subtoggle"></button>
+          <button class="btn" id="subclear">เอาซับออก</button>
+        </div>
+        <p class="hint" id="subinfo"></p>
+        <div class="sliders" style="margin-top:10px">
+          <label class="slider wide"><span>ขนาดตัวอักษร</span>
+            <input type="range" id="subsize" min="50" max="200" step="5"><output id="subsizev"></output></label>
+          <div class="slider wide"><span>เลื่อนเวลาซับ</span>
+            <div class="stepper">
+              <button class="btn" id="offm" title="ให้ซับขึ้นเร็วขึ้น">−0.25</button>
+              <button class="btn" id="offp" title="ให้ซับขึ้นช้าลง">+0.25</button>
+              <button class="btn" id="off0">รีเซ็ต</button>
+            </div>
+            <output id="offv"></output></div>
+        </div>
+      </div>
+
+      <details class="panel" open>
+        <summary>ปรับภาพ</summary>
+        <div class="sliders" id="sliders"></div>
+        <div class="row" style="margin-top:12px"><button class="btn" id="reset">คืนค่าเริ่มต้น</button></div>
+      </details>
+    </div>
+  </main>
+
+  <aside class="panel side">
+    <h2>เพลย์ลิสต์ <small id="count"></small></h2>
+    <div id="drop">
+      ลากไฟล์วิดีโอและไฟล์ซับมาวางที่นี่
+      <button class="btn primary" id="pick">เลือกไฟล์วิดีโอ</button>
+      <input type="file" id="file" accept="video/*,.mkv,.mov,.m4v,.webm,.mp4" multiple hidden>
+    </div>
+    <div class="urlrow">
+      <input type="url" id="url" placeholder="วางลิงก์ .mp4 หรือ .m3u8" inputmode="url">
+      <button class="btn" id="addurl">เพิ่ม</button>
+    </div>
+    <ul id="list"></ul>
+    <p id="empty">รายการที่เพิ่มจะแสดงที่นี่ เล่นจบแล้วจะต่อไฟล์ถัดไปเอง</p>
+  </aside>
+</div>
+
+<script>
+(function(){
+  var $ = function(s){ return document.querySelector(s); };
+  var video = $('#v'), stage = $('#stage'), frame = $('#frame');
+  var list = [], cur = -1, hls = null, uid = 0;
+
+  var RATIOS = [
+    ['auto','อัตโนมัติ'],['16:9','16:9'],['4:3','4:3'],['21:9','21:9'],
+    ['1:1','1:1'],['9:16','9:16'],['fill','ยืดเต็มจอ'],['crop','ขยายตัดขอบ']
+  ];
+  var SLIDERS = [
+    ['sh','ความคมชัด',0,100,0],['b','ความสว่าง',50,150,100],
+    ['c','คอนทราสต์',50,150,100],['s','ความสดของสี',0,200,100]
+  ];
+  var DEFAULTS = {ratio:'auto', sh:0, b:100, c:100, s:100, subSize:100, subOn:true};
+  var state = Object.assign({}, DEFAULTS);
+  try { Object.assign(state, JSON.parse(localStorage.getItem('vp-settings') || '{}')); } catch(e){}
+  function save(){ try { localStorage.setItem('vp-settings', JSON.stringify(state)); } catch(e){} }
+
+  /* ---------- aspect ratio ---------- */
+  function layout(){
+    var W = stage.clientWidth, H = stage.clientHeight, w = W, h = H, fit = 'contain', m = state.ratio;
+    if (m === 'fill') fit = 'fill';
+    else if (m === 'crop') fit = 'cover';
+    else if (m !== 'auto'){
+      var p = m.split(':'), r = Number(p[0]) / Number(p[1]);
+      if (W / H > r){ h = H; w = H * r; } else { w = W; h = W / r; }
+      fit = 'fill';
+    }
+    frame.style.width = w + 'px';
+    frame.style.height = h + 'px';
+    video.style.objectFit = fit;
+    $('#sub').style.fontSize = Math.max(12, Math.round(h * 0.052 * state.subSize / 100)) + 'px';
+  }
+  RATIOS.forEach(function(r){
+    var b = document.createElement('button');
+    b.className = 'chip'; b.textContent = r[1]; b.dataset.v = r[0];
+    b.onclick = function(){ state.ratio = r[0]; save(); syncRatio(); layout(); };
+    $('#ratios').appendChild(b);
+  });
+  function syncRatio(){
+    document.querySelectorAll('#ratios .chip').forEach(function(b){
+      b.setAttribute('aria-pressed', String(b.dataset.v === state.ratio));
+    });
+  }
+  if (window.ResizeObserver) new ResizeObserver(layout).observe(stage);
+  window.addEventListener('resize', layout);
+  document.addEventListener('fullscreenchange', layout);
+  document.addEventListener('webkitfullscreenchange', layout);
+
+  /* ---------- picture adjustments ---------- */
+  function applyFilter(){
+    var isDefault = state.sh === 0 && state.b === 100 && state.c === 100 && state.s === 100;
+    if (isDefault){ video.style.filter = ''; return; }
+    var f = 'brightness(' + state.b + '%) contrast(' + state.c + '%) saturate(' + state.s + '%)';
+    if (state.sh > 0){
+      var a = state.sh / 100 * 1.5;
+      $('#kernel').setAttribute('kernelMatrix',
+        [0, -a, 0, -a, 1 + 4 * a, -a, 0, -a, 0].join(' '));
+      f = 'url(#sharp) ' + f;
+    }
+    video.style.filter = f;
+  }
+  SLIDERS.forEach(function(s){
+    var wrap = document.createElement('label'); wrap.className = 'slider';
+    var name = document.createElement('span'); name.textContent = s[1];
+    var inp = document.createElement('input');
+    inp.type = 'range'; inp.min = s[2]; inp.max = s[3]; inp.step = 1; inp.id = 'sl-' + s[0];
+    var out = document.createElement('output');
+    inp.oninput = function(){
+      state[s[0]] = Number(inp.value); out.textContent = inp.value; applyFilter(); save();
+    };
+    wrap.appendChild(name); wrap.appendChild(inp); wrap.appendChild(out);
+    $('#sliders').appendChild(wrap);
+  });
+  function syncSliders(){
+    SLIDERS.forEach(function(s){
+      var inp = $('#sl-' + s[0]);
+      inp.value = state[s[0]];
+      inp.nextElementSibling.textContent = state[s[0]];
+    });
+  }
+  $('#reset').onclick = function(){
+    SLIDERS.forEach(function(s){ state[s[0]] = s[4]; });
+    save(); syncSliders(); applyFilter();
+  };
+
+  /* ---------- quality ---------- */
+  var qSel = $('#quality'), qHint = $('#qhint');
+  function setQuality(mode, levels){
+    qSel.innerHTML = '';
+    if (mode === 'levels'){
+      var o = document.createElement('option'); o.value = '-1'; o.textContent = 'อัตโนมัติ';
+      qSel.appendChild(o);
+      levels.map(function(l, i){ return {i:i, h:l.height || 0, br:l.bitrate || 0}; })
+        .sort(function(a, b){ return b.h - a.h || b.br - a.br; })
+        .forEach(function(l){
+          var opt = document.createElement('option');
+          opt.value = String(l.i);
+          opt.textContent = (l.h ? l.h + 'p' : 'ระดับ ' + (l.i + 1)) +
+            (l.br ? ' · ' + (l.br / 1e6).toFixed(1) + ' Mbps' : '');
+          qSel.appendChild(opt);
+        });
+      qSel.disabled = levels.length < 2;
+      qHint.textContent = levels.length < 2 ? 'สตรีมนี้มีความละเอียดเดียว' : '';
+    } else {
+      var only = document.createElement('option');
+      only.textContent = mode === 'native' ? 'อัตโนมัติ (เบราว์เซอร์เลือกให้)' : 'ต้นฉบับ';
+      qSel.appendChild(only);
+      qSel.disabled = true;
+      qHint.textContent = mode === 'native'
+        ? 'เบราว์เซอร์นี้เลือกความละเอียดของสตรีมเอง จึงปรับเองไม่ได้'
+        : (mode === 'file' ? 'ไฟล์นี้มีความละเอียดเดียว เลือกความละเอียดได้เฉพาะสตรีม .m3u8 ที่มีหลายระดับ' : '');
+    }
+  }
+  qSel.onchange = function(){ if (hls) hls.currentLevel = Number(qSel.value); };
+
+  /* ---------- playback ---------- */
+  function showError(msg){ $('#errmsg').textContent = msg; $('#err').hidden = false; }
+  function clearError(){ $('#err').hidden = true; }
+  function meta(){
+    var it = list[cur];
+    if (!it){ $('#meta').textContent = ''; return; }
+    var res = video.videoWidth ? video.videoWidth + '×' + video.videoHeight : '';
+    $('#meta').textContent = res;
+  }
+  function stop(){
+    if (hls){ hls.destroy(); hls = null; }
+    video.pause(); video.removeAttribute('src'); video.load();
+  }
+  function play(i){
+    if (i < 0 || i >= list.length) return;
+    cur = i;
+    var it = list[i];
+    stop(); clearError();
+    $('#blank').hidden = true;
+    if (it.kind === 'hls' && window.Hls && Hls.isSupported()){
+      hls = new Hls();
+      hls.on(Hls.Events.MANIFEST_PARSED, function(){ setQuality('levels', hls.levels); });
+      hls.on(Hls.Events.ERROR, function(_, d){
+        if (!d.fatal) return;
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR){ hls.recoverMediaError(); return; }
+        showError('โหลดสตรีมไม่สำเร็จ ลิงก์อาจหมดอายุหรือเซิร์ฟเวอร์ไม่อนุญาตให้เล่นจากเว็บอื่น (CORS)');
+      });
+      hls.loadSource(it.url);
+      hls.attachMedia(video);
+      setQuality('levels', []);
+      qHint.textContent = 'กำลังโหลดรายการความละเอียด…';
+    } else if (it.kind === 'hls'){
+      video.src = it.url;
+      setQuality('native');
+    } else {
+      video.src = it.url;
+      setQuality('file');
+    }
+    video.playbackRate = Number($('#speed').value);
+    var p = video.play();
+    if (p && p.catch) p.catch(function(){});
+    render(); meta(); syncSub();
+  }
+  video.addEventListener('loadedmetadata', meta);
+  video.addEventListener('resize', meta);
+  video.addEventListener('ended', function(){ if (cur < list.length - 1) play(cur + 1); });
+  video.addEventListener('error', function(){
+    if (hls || !video.getAttribute('src')) return;
+    var it = list[cur];
+    showError(it && it.kind === 'file'
+      ? 'เบราว์เซอร์นี้ไม่รองรับรูปแบบไฟล์นี้ แนะนำไฟล์ MP4 (H.264) หรือ WebM'
+      : 'เปิดลิงก์นี้ไม่ได้ ตรวจสอบว่าเป็นลิงก์ตรงไปยังไฟล์วิดีโอ');
+  });
+  $('#speed').onchange = function(){ video.playbackRate = Number(this.value); };
+  $('#prev').onclick = function(){ if (cur > 0) play(cur - 1); };
+  $('#next').onclick = function(){ if (cur < list.length - 1) play(cur + 1); };
+  $('#fs').onclick = function(){
+    var el = document.fullscreenElement || document.webkitFullscreenElement;
+    if (el){ (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
+    else if (stage.requestFullscreen) stage.requestFullscreen();
+    else if (stage.webkitRequestFullscreen) stage.webkitRequestFullscreen();
+    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  };
+
+  /* ---------- playlist ---------- */
+  function fmtSize(b){
+    return b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(1) + ' MB';
+  }
+  function render(){
+    var ul = $('#list'); ul.innerHTML = '';
+    list.forEach(function(it, i){
+      var li = document.createElement('li');
+      if (i === cur) li.className = 'on';
+      var n = document.createElement('span'); n.className = 'n';
+      n.textContent = i === cur ? '▶' : String(i + 1);
+      var t = document.createElement('span'); t.className = 't'; t.textContent = it.name;
+      var k = document.createElement('span'); k.className = 'k';
+      k.textContent = (it.kind === 'file' ? 'ไฟล์ในเครื่อง · ' + fmtSize(it.size)
+                    : it.kind === 'hls' ? 'สตรีม HLS' : 'ลิงก์วิดีโอ') + (it.sub ? ' · มีซับ' : '');
+      t.appendChild(k);
+      var x = document.createElement('button'); x.className = 'x'; x.textContent = '✕';
+      x.setAttribute('aria-label', 'ลบ ' + it.name);
+      x.onclick = function(e){ e.stopPropagation(); remove(i); };
+      li.onclick = function(){ play(i); };
+      li.appendChild(n); li.appendChild(t); li.appendChild(x);
+      ul.appendChild(li);
+    });
+    $('#empty').hidden = list.length > 0;
+    $('#count').textContent = list.length ? list.length + ' รายการ' : '';
+  }
+  function remove(i){
+    var it = list[i];
+    var wasCurrent = i === cur;
+    list.splice(i, 1);
+    if (wasCurrent){
+      stop();
+      if (it.kind === 'file') URL.revokeObjectURL(it.url);
+      cur = -1;
+      if (list.length) play(Math.min(i, list.length - 1));
+      else { $('#blank').hidden = false; clearError(); setQuality('none'); meta(); render(); syncSub(); }
+    } else {
+      if (it.kind === 'file') URL.revokeObjectURL(it.url);
+      if (i < cur) cur--;
+      render();
+    }
+  }
+  function addFiles(files){
+    var first = list.length, added = 0;
+    Array.prototype.forEach.call(files, function(f){
+      if (!(f.type.indexOf('video/') === 0 || /\.(mp4|m4v|webm|mov|mkv|ogv|avi|ts)$/i.test(f.name))) return;
+      list.push({id:++uid, name:f.name, kind:'file', url:URL.createObjectURL(f), size:f.size});
+      added++;
+    });
+    if (!added) return;
+    if (cur === -1) play(first); else render();
+  }
+  function addUrl(){
+    var inp = $('#url'), raw = inp.value.trim(), u;
+    if (!raw) return;
+    try { u = new URL(raw); } catch(e){ u = null; }
+    if (!u || !/^https?:$/.test(u.protocol)){
+      inp.setCustomValidity('ใส่ลิงก์ที่ขึ้นต้นด้วย http:// หรือ https://');
+      inp.reportValidity(); return;
+    }
+    inp.setCustomValidity('');
+    var seg = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
+    try { seg = decodeURIComponent(seg); } catch(e){}
+    list.push({id:++uid, name:seg, kind:/\.m3u8$/i.test(u.pathname) ? 'hls' : 'url', url:u.href});
+    inp.value = '';
+    if (cur === -1) play(list.length - 1); else render();
+  }
+  $('#pick').onclick = function(){ $('#file').click(); };
+  $('#file').onchange = function(){ addFiles(this.files); this.value = ''; };
+  $('#addurl').onclick = addUrl;
+  $('#url').addEventListener('input', function(){ this.setCustomValidity(''); });
+  $('#url').addEventListener('keydown', function(e){ if (e.key === 'Enter') addUrl(); });
+
+  /* ---------- subtitles ---------- */
+  var subEl = $('#sub'), lastSub = '', subMsg = '';
+  function isSubName(n){ return /\.(srt|vtt|ass|ssa)$/i.test(n); }
+  function baseName(n){ return n.replace(/\.[^.]+$/, '').toLowerCase(); }
+  function decodeText(buf){
+    var u8 = new Uint8Array(buf);
+    if (u8[0] === 0xFF && u8[1] === 0xFE) return new TextDecoder('utf-16le').decode(u8);
+    if (u8[0] === 0xFE && u8[1] === 0xFF) return new TextDecoder('utf-16be').decode(u8);
+    try { return new TextDecoder('utf-8', {fatal:true}).decode(u8); }
+    catch(e){
+      try { return new TextDecoder('windows-874').decode(u8); }
+      catch(e2){ return new TextDecoder().decode(u8); }
+    }
+  }
+  function toSec(str){
+    var m = /(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?/.exec(str);
+    if (!m) return NaN;
+    return Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3]) + (m[4] ? Number('0.' + m[4]) : 0);
+  }
+  function cleanText(t){
+    return t.replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+      .replace(/[ \t]+\n/g, '\n').trim();
+  }
+  function parseSubs(text, name){
+    text = text.replace(/\r\n?/g, '\n');
+    var cues = [];
+    if (/\.(ass|ssa)$/i.test(name) || /^\[Script Info\]/im.test(text)){
+      var n = 10, si = 1, ei = 2, inEvents = false;
+      text.split('\n').forEach(function(line){
+        if (/^\s*\[.*\]\s*$/.test(line)){ inEvents = /\[Events\]/i.test(line); return; }
+        if (!inEvents) return;
+        var f = /^Format:\s*(.*)$/i.exec(line);
+        if (f){
+          var cols = f[1].split(',').map(function(c){ return c.trim().toLowerCase(); });
+          n = cols.length;
+          if (cols.indexOf('start') >= 0) si = cols.indexOf('start');
+          if (cols.indexOf('end') >= 0) ei = cols.indexOf('end');
+          return;
+        }
+        var d = /^Dialogue:\s*(.*)$/i.exec(line);
+        if (!d) return;
+        var parts = d[1].split(',');
+        if (parts.length < n) return;
+        var raw = parts.slice(n - 1).join(',');
+        var txt = cleanText(raw.replace(/\{[^}]*\}/g, '').replace(/\\N/gi, '\n').replace(/\\h/g, ' '));
+        var s = toSec(parts[si]), e = toSec(parts[ei]);
+        if (!isNaN(s) && !isNaN(e) && txt) cues.push({s:s, e:e, t:txt});
+      });
+    } else {
+      text.replace(/\n[ \t]+\n/g, '\n\n').split(/\n{2,}/).forEach(function(block){
+        var lines = block.split('\n'), i = -1;
+        for (var j = 0; j < lines.length; j++){ if (lines[j].indexOf('-->') >= 0){ i = j; break; } }
+        if (i < 0) return;
+        var tp = lines[i].split('-->'), s = toSec(tp[0]), e = toSec(tp[1]);
+        var txt = cleanText(lines.slice(i + 1).join('\n'));
+        if (!isNaN(s) && !isNaN(e) && txt) cues.push({s:s, e:e, t:txt});
+      });
+    }
+    cues.sort(function(a, b){ return a.s - b.s; });
+    return cues;
+  }
+  function findVideoFor(subName){
+    var sb = baseName(subName), i, vb;
+    for (i = 0; i < list.length; i++){ if (baseName(list[i].name) === sb) return list[i]; }
+    for (i = 0; i < list.length; i++){
+      vb = baseName(list[i].name);
+      if (sb.indexOf(vb + '.') === 0 || sb.indexOf(vb + '_') === 0 || sb.indexOf(vb + '-') === 0) return list[i];
+    }
+    return null;
+  }
+  function addSubs(files, fromPicker){
+    var subs = Array.prototype.filter.call(files, function(f){ return isSubName(f.name); });
+    if (!subs.length){
+      if (fromPicker){ subMsg = 'รองรับเฉพาะไฟล์ .srt .vtt .ass .ssa'; syncSub(); }
+      return;
+    }
+    if (!list.length){ subMsg = 'เพิ่มวิดีโอก่อน แล้วค่อยเลือกไฟล์ซับ'; syncSub(); return; }
+    var pending = subs.length, ok = 0, bad = [], unmatched = [];
+    subs.forEach(function(f){
+      f.arrayBuffer().then(function(buf){
+        var cues = parseSubs(decodeText(buf), f.name);
+        if (!cues.length){ bad.push(f.name); return; }
+        var target = (fromPicker && subs.length === 1 && cur >= 0) ? list[cur] : findVideoFor(f.name);
+        if (!target && subs.length === 1 && cur >= 0) target = list[cur];
+        if (!target){ unmatched.push(f.name); return; }
+        target.sub = {name:f.name, cues:cues};
+        if (typeof target.offset !== 'number') target.offset = 0;
+        ok++;
+      }).catch(function(){ bad.push(f.name); }).then(function(){
+        if (--pending > 0) return;
+        var msg = [];
+        if (bad.length) msg.push('อ่านไฟล์ซับไม่ได้: ' + bad.join(', '));
+        if (unmatched.length) msg.push('ชื่อไม่ตรงกับวิดีโอใด: ' + unmatched.join(', '));
+        subMsg = msg.join(' · ');
+        render(); syncSub();
+      });
+    });
+  }
+  function tick(){
+    var it = list[cur], txt = '';
+    if (state.subOn && it && it.sub){
+      var t = video.currentTime - (it.offset || 0), c = it.sub.cues, out = [];
+      for (var i = 0; i < c.length; i++){
+        if (c[i].s > t) break;
+        if (t < c[i].e) out.push(c[i].t);
+      }
+      txt = out.join('\n');
+    }
+    if (txt !== lastSub){ lastSub = txt; subEl.textContent = txt; }
+  }
+  function syncSub(){
+    var it = list[cur], has = !!(it && it.sub), off = has ? (it.offset || 0) : 0;
+    $('#subtoggle').textContent = state.subOn ? 'ซับ: เปิด' : 'ซับ: ปิด';
+    $('#subtoggle').setAttribute('aria-pressed', String(state.subOn));
+    $('#subsize').value = state.subSize;
+    $('#subsizev').textContent = state.subSize + '%';
+    ['#subclear', '#offm', '#offp', '#off0'].forEach(function(id){ $(id).disabled = !has; });
+    $('#offv').textContent = (off > 0 ? '+' : '') + off.toFixed(2) + ' วิ';
+    var info = has ? 'ซับ: ' + it.sub.name + ' · ' + it.sub.cues.length + ' บรรทัด'
+      : (it ? 'วิดีโอนี้ยังไม่มีซับ เลือกไฟล์ .srt .vtt .ass หรือลากมาวางพร้อมวิดีโอ (ชื่อไฟล์ตรงกันจะจับคู่ให้เอง)'
+            : 'รองรับไฟล์ .srt .vtt .ass');
+    $('#subinfo').textContent = subMsg ? subMsg + (has ? ' · ' + info : '') : info;
+    subMsg = '';
+    tick();
+  }
+  function shiftSub(d){
+    var it = list[cur];
+    if (!it || !it.sub) return;
+    it.offset = d === 0 ? 0 : Math.round(((it.offset || 0) + d) * 100) / 100;
+    syncSub();
+  }
+  $('#subpick').onclick = function(){ $('#subfile').click(); };
+  $('#subfile').onchange = function(){ addSubs(this.files, true); this.value = ''; };
+  $('#subtoggle').onclick = function(){ state.subOn = !state.subOn; save(); syncSub(); };
+  $('#subclear').onclick = function(){ var it = list[cur]; if (it){ delete it.sub; it.offset = 0; render(); syncSub(); } };
+  $('#subsize').oninput = function(){ state.subSize = Number(this.value); save(); layout(); syncSub(); };
+  $('#offm').onclick = function(){ shiftSub(-0.25); };
+  $('#offp').onclick = function(){ shiftSub(0.25); };
+  $('#off0').onclick = function(){ shiftSub(0); };
+  video.addEventListener('timeupdate', tick);
+  video.addEventListener('seeked', tick);
+  video.addEventListener('seeking', tick);
+  (function loop(){ if (!video.paused) tick(); requestAnimationFrame(loop); })();
+
+  var dragDepth = 0;
+  window.addEventListener('dragenter', function(e){ e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+  window.addEventListener('dragleave', function(){ if (--dragDepth <= 0){ dragDepth = 0; document.body.classList.remove('dragging'); } });
+  window.addEventListener('dragover', function(e){ e.preventDefault(); });
+  window.addEventListener('drop', function(e){
+    e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+    if (e.dataTransfer && e.dataTransfer.files.length){ addFiles(e.dataTransfer.files); addSubs(e.dataTransfer.files, false); }
+  });
+
+  /* ---------- init ---------- */
+  syncRatio(); syncSliders(); applyFilter(); layout(); render(); setQuality('none'); syncSub();
+})();
+</script>
+</body>
+</html>
