@@ -5,10 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0e1013">
 <title>Video Player</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Video Player">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
 <style>
   :root{
     --bg:#0e1013; --surface:#171a1f; --raised:#1f242b; --line:#2a3039;
@@ -48,6 +55,10 @@
     text-shadow:0 0 3px #000,0 0 3px #000,1px 1px 2px #000,-1px -1px 2px #000,1px -1px 2px #000,-1px 1px 2px #000;
   }
   #sub:empty{display:none}
+  #sub span{
+    padding:.06em .35em;border-radius:.2em;background:rgba(0,0,0,var(--sub-bg,0));
+    -webkit-box-decoration-break:clone;box-decoration-break:clone;
+  }
   video{width:100%;height:100%;display:block;background:#000;object-fit:contain}
   .overlay{
     position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;
@@ -93,6 +104,8 @@
   .slider output{color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
   input[type=range]{width:100%;accent-color:var(--accent);height:28px}
   .slider.wide{grid-template-columns:104px minmax(0,1fr) 62px}
+  .slider select{height:36px;font-size:14px}
+  .subsliders{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
   .stepper{display:flex;gap:6px;flex-wrap:wrap}
   .stepper .btn{height:36px;padding:0 10px;font-size:14px;font-variant-numeric:tabular-nums}
   .btn:disabled{opacity:.45;cursor:default}
@@ -194,7 +207,7 @@
           <button class="btn" id="subclear">เอาซับออก</button>
         </div>
         <p class="hint" id="subinfo"></p>
-        <div class="sliders" style="margin-top:10px">
+        <div class="sliders subsliders" style="margin-top:10px">
           <label class="slider wide"><span>ขนาดตัวอักษร</span>
             <input type="range" id="subsize" min="50" max="200" step="5"><output id="subsizev"></output></label>
           <div class="slider wide"><span>เลื่อนเวลาซับ</span>
@@ -204,6 +217,14 @@
               <button class="btn" id="off0">รีเซ็ต</button>
             </div>
             <output id="offv"></output></div>
+          <label class="slider wide"><span>ความสูงของซับ</span>
+            <input type="range" id="subpos" min="0" max="40" step="1"><output id="subposv"></output></label>
+          <label class="slider wide"><span>พื้นหลังซับ</span>
+            <input type="range" id="subbg" min="0" max="100" step="5"><output id="subbgv"></output></label>
+          <label class="slider wide"><span>สีตัวอักษร</span>
+            <select id="subcolor">
+              <option value="#ffffff">ขาว</option><option value="#ffe14d">เหลือง</option><option value="#7fe3ff">ฟ้า</option>
+            </select><output></output></label>
         </div>
       </div>
 
@@ -239,16 +260,39 @@
 
   var RATIOS = [
     ['auto','อัตโนมัติ'],['16:9','16:9'],['4:3','4:3'],['21:9','21:9'],
+    ['1.90:1','IMAX 1.90:1'],['1.43:1','IMAX 1.43:1'],
     ['1:1','1:1'],['9:16','9:16'],['fill','ยืดเต็มจอ'],['crop','ขยายตัดขอบ']
   ];
   var SLIDERS = [
     ['sh','ความคมชัด',0,100,0],['b','ความสว่าง',50,150,100],
     ['c','คอนทราสต์',50,150,100],['s','ความสดของสี',0,200,100]
   ];
-  var DEFAULTS = {ratio:'auto', sh:0, b:100, c:100, s:100, subSize:100, subOn:true};
+  var DEFAULTS = {ratio:'auto', sh:0, b:100, c:100, s:100, subSize:100, subOn:true,
+                  subPos:12, subBg:0, subColor:'#ffffff'};
   var state = Object.assign({}, DEFAULTS);
   try { Object.assign(state, JSON.parse(localStorage.getItem('vp-settings') || '{}')); } catch(e){}
+  if (!RATIOS.some(function(r){ return r[0] === state.ratio; })) state.ratio = 'auto';
   function save(){ try { localStorage.setItem('vp-settings', JSON.stringify(state)); } catch(e){} }
+
+  /* Remembered subtitle offsets, keyed by video identity + subtitle file name.
+     Only names, sizes and numbers are stored — never file contents. */
+  var OFFSETS_KEY = 'vp-offsets', OFFSETS_MAX = 200, offsets = {};
+  try { offsets = JSON.parse(localStorage.getItem(OFFSETS_KEY) || '{}') || {}; } catch(e){ offsets = {}; }
+  function offsetKey(it){
+    return (it.kind === 'file' ? 'f:' + it.name + ':' + it.size : 'u:' + it.url) + '|' + it.sub.name;
+  }
+  function loadOffset(it){
+    var v = offsets[offsetKey(it)];
+    return typeof v === 'number' && isFinite(v) ? v : 0;
+  }
+  function storeOffset(it){
+    var k = offsetKey(it);
+    delete offsets[k];
+    if (it.offset) offsets[k] = it.offset;
+    var keys = Object.keys(offsets);
+    for (var i = 0; i < keys.length - OFFSETS_MAX; i++) delete offsets[keys[i]];
+    try { localStorage.setItem(OFFSETS_KEY, JSON.stringify(offsets)); } catch(e){}
+  }
 
   /* ---------- aspect ratio ---------- */
   function layout(){
@@ -346,7 +390,16 @@
         : (mode === 'file' ? 'ไฟล์นี้มีความละเอียดเดียว เลือกความละเอียดได้เฉพาะสตรีม .m3u8 ที่มีหลายระดับ' : '');
     }
   }
-  qSel.onchange = function(){ if (hls) hls.currentLevel = Number(qSel.value); };
+  function autoLabel(level){
+    var o = qSel.options[0], l = hls && hls.levels[level];
+    if (!o || o.value !== '-1') return;
+    o.textContent = 'อัตโนมัติ' + (hls.autoLevelEnabled && l && l.height ? ' (' + l.height + 'p)' : '');
+  }
+  qSel.onchange = function(){
+    if (!hls) return;
+    hls.currentLevel = Number(qSel.value);
+    autoLabel(hls.currentLevel);
+  };
 
   /* ---------- playback ---------- */
   function showError(msg){ $('#errmsg').textContent = msg; $('#err').hidden = false; }
@@ -369,10 +422,17 @@
     $('#blank').hidden = true;
     if (it.kind === 'hls' && window.Hls && Hls.isSupported()){
       hls = new Hls();
+      var lastRecover = 0;
       hls.on(Hls.Events.MANIFEST_PARSED, function(){ setQuality('levels', hls.levels); });
+      hls.on(Hls.Events.LEVEL_SWITCHED, function(_, d){ autoLabel(d.level); });
       hls.on(Hls.Events.ERROR, function(_, d){
         if (!d.fatal) return;
-        if (d.type === Hls.ErrorTypes.MEDIA_ERROR){ hls.recoverMediaError(); return; }
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && Date.now() - lastRecover > 3000){
+          lastRecover = Date.now(); hls.recoverMediaError(); return;
+        }
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR){
+          showError('ถอดรหัสสตรีมนี้ไม่ได้ เบราว์เซอร์อาจไม่รองรับ codec ของวิดีโอ'); return;
+        }
         showError('โหลดสตรีมไม่สำเร็จ ลิงก์อาจหมดอายุหรือเซิร์ฟเวอร์ไม่อนุญาตให้เล่นจากเว็บอื่น (CORS)');
       });
       hls.loadSource(it.url);
@@ -572,7 +632,7 @@
         if (!target && subs.length === 1 && cur >= 0) target = list[cur];
         if (!target){ unmatched.push(f.name); return; }
         target.sub = {name:f.name, cues:cues};
-        if (typeof target.offset !== 'number') target.offset = 0;
+        target.offset = loadOffset(target);
         ok++;
       }).catch(function(){ bad.push(f.name); }).then(function(){
         if (--pending > 0) return;
@@ -594,7 +654,10 @@
       }
       txt = out.join('\n');
     }
-    if (txt !== lastSub){ lastSub = txt; subEl.textContent = txt; }
+    if (txt !== lastSub){
+      lastSub = txt; subEl.textContent = '';
+      if (txt){ var sp = document.createElement('span'); sp.textContent = txt; subEl.appendChild(sp); }
+    }
   }
   function syncSub(){
     var it = list[cur], has = !!(it && it.sub), off = has ? (it.offset || 0) : 0;
@@ -602,6 +665,15 @@
     $('#subtoggle').setAttribute('aria-pressed', String(state.subOn));
     $('#subsize').value = state.subSize;
     $('#subsizev').textContent = state.subSize + '%';
+    $('#subpos').value = state.subPos;
+    $('#subposv').textContent = state.subPos + '%';
+    $('#subbg').value = state.subBg;
+    $('#subbgv').textContent = state.subBg + '%';
+    $('#subcolor').value = state.subColor;
+    if ($('#subcolor').selectedIndex < 0){ state.subColor = DEFAULTS.subColor; $('#subcolor').value = state.subColor; }
+    subEl.style.bottom = state.subPos + '%';
+    subEl.style.color = state.subColor;
+    subEl.style.setProperty('--sub-bg', String(state.subBg / 100));
     ['#subclear', '#offm', '#offp', '#off0'].forEach(function(id){ $(id).disabled = !has; });
     $('#offv').textContent = (off > 0 ? '+' : '') + off.toFixed(2) + ' วิ';
     var info = has ? 'ซับ: ' + it.sub.name + ' · ' + it.sub.cues.length + ' บรรทัด'
@@ -615,6 +687,7 @@
     var it = list[cur];
     if (!it || !it.sub) return;
     it.offset = d === 0 ? 0 : Math.round(((it.offset || 0) + d) * 100) / 100;
+    storeOffset(it);
     syncSub();
   }
   $('#subpick').onclick = function(){ $('#subfile').click(); };
@@ -622,6 +695,9 @@
   $('#subtoggle').onclick = function(){ state.subOn = !state.subOn; save(); syncSub(); };
   $('#subclear').onclick = function(){ var it = list[cur]; if (it){ delete it.sub; it.offset = 0; render(); syncSub(); } };
   $('#subsize').oninput = function(){ state.subSize = Number(this.value); save(); layout(); syncSub(); };
+  $('#subpos').oninput = function(){ state.subPos = Number(this.value); save(); syncSub(); };
+  $('#subbg').oninput = function(){ state.subBg = Number(this.value); save(); syncSub(); };
+  $('#subcolor').onchange = function(){ state.subColor = this.value; save(); syncSub(); };
   $('#offm').onclick = function(){ shiftSub(-0.25); };
   $('#offp').onclick = function(){ shiftSub(0.25); };
   $('#off0').onclick = function(){ shiftSub(0); };
@@ -641,6 +717,10 @@
 
   /* ---------- init ---------- */
   syncRatio(); syncSliders(); applyFilter(); layout(); render(); setQuality('none'); syncSub();
+
+  if ('serviceWorker' in navigator && window.isSecureContext && location.protocol !== 'file:'){
+    window.addEventListener('load', function(){ navigator.serviceWorker.register('sw.js').catch(function(){}); });
+  }
 })();
 </script>
 </body>
