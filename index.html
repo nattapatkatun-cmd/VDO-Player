@@ -68,6 +68,7 @@
   .overlay strong{display:block;color:var(--text);font-weight:500;font-size:16px;margin-bottom:6px}
   #err{background:rgba(0,0,0,.82);color:var(--text);pointer-events:none}
   #err strong{color:var(--danger)}
+  #busy{background:rgba(0,0,0,.82);font-variant-numeric:tabular-nums}
 
   /* ---------- controls ---------- */
   .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
@@ -166,6 +167,9 @@
       <div class="overlay" id="blank">
         <div><strong>ยังไม่มีวิดีโอ</strong>เพิ่มไฟล์หรือวางลิงก์เพื่อเริ่มเล่น</div>
       </div>
+      <div class="overlay" id="busy" hidden>
+        <div><strong id="busytitle"></strong><span id="busymsg"></span></div>
+      </div>
       <div class="overlay" id="err" hidden>
         <div><strong>เล่นวิดีโอนี้ไม่ได้</strong><span id="errmsg"></span></div>
       </div>
@@ -182,6 +186,10 @@
           <div class="field">
             <div class="label">ความละเอียด</div>
             <select id="quality" disabled><option>ต้นฉบับ</option></select>
+          </div>
+          <div class="field" id="audiofield" hidden>
+            <div class="label">แทร็กเสียง</div>
+            <select id="audio"></select>
           </div>
           <div class="field">
             <div class="label">ความเร็ว</div>
@@ -418,7 +426,7 @@
     if (i < 0 || i >= list.length) return;
     cur = i;
     var it = list[i];
-    stop(); clearError();
+    cancelRemux(); stop(); clearError();
     $('#blank').hidden = true;
     if (it.kind === 'hls' && window.Hls && Hls.isSupported()){
       hls = new Hls();
@@ -443,20 +451,30 @@
       video.src = it.url;
       setQuality('native');
     } else {
-      video.src = it.url;
+      video.src = it.remuxUrl || it.url;
       setQuality('file');
     }
     video.playbackRate = Number($('#speed').value);
     var p = video.play();
     if (p && p.catch) p.catch(function(){});
-    render(); meta(); syncSub();
+    render(); meta(); syncSub(); syncAudio();
   }
   video.addEventListener('loadedmetadata', meta);
+  video.addEventListener('loadedmetadata', function(){
+    // MKV whose video codec the browser won't play from Matroska (typically HEVC): only audio comes out.
+    var it = list[cur];
+    if (isMkv(it) && !it.remuxUrl && !it.remuxFailed && !video.videoWidth) remux(it, video.currentTime);
+  });
   video.addEventListener('resize', meta);
   video.addEventListener('ended', function(){ if (cur < list.length - 1) play(cur + 1); });
   video.addEventListener('error', function(){
     if (hls || !video.getAttribute('src')) return;
     var it = list[cur];
+    if (isMkv(it) && !it.remuxUrl && !it.remuxFailed){ remux(it, 0); return; }
+    if (it && it.remuxUrl && video.currentSrc === it.remuxUrl){
+      showError('เล่นไฟล์ที่แปลงแล้วไม่ได้ ไฟล์อาจใหญ่เกินหน่วยความจำที่เบราว์เซอร์ให้ใช้ ถ้าเปิดในหน้าต่างไม่ระบุตัวตน (Incognito/InPrivate) ลองเปิดในหน้าต่างปกติ');
+      return;
+    }
     showError(it && it.kind === 'file'
       ? 'เบราว์เซอร์นี้ไม่รองรับรูปแบบไฟล์นี้ แนะนำไฟล์ MP4 (H.264) หรือ WebM'
       : 'เปิดลิงก์นี้ไม่ได้ ตรวจสอบว่าเป็นลิงก์ตรงไปยังไฟล์วิดีโอ');
@@ -472,6 +490,158 @@
     else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
   };
 
+  /* ---------- MKV → MP4 (local remux, no re-encoding) ----------
+     Browsers demux Matroska narrowly: HEVC in MKV plays audio only even where the device can decode
+     HEVC from MP4. The packets are copied into a fragmented MP4 kept in memory as a Blob — nothing is
+     uploaded or written to storage. mediabunny is loaded the first time this is needed. */
+  var MB_URL = 'https://cdn.jsdelivr.net/npm/mediabunny@1.60.0/dist/bundles/mediabunny.min.mjs';
+  var mbLoad = null, remuxJob = null, toastTimer = 0;
+  var LANGS = {tha:'ไทย', eng:'อังกฤษ', jpn:'ญี่ปุ่น', kor:'เกาหลี', chi:'จีน', zho:'จีน', fre:'ฝรั่งเศส',
+               fra:'ฝรั่งเศส', ger:'เยอรมัน', deu:'เยอรมัน', spa:'สเปน', ita:'อิตาลี', rus:'รัสเซีย',
+               vie:'เวียดนาม', ind:'อินโดนีเซีย', may:'มลายู', msa:'มลายู', hin:'ฮินดี'};
+  var CODECS = {hevc:'HEVC (H.265)', avc:'H.264', vp9:'VP9', vp8:'VP8', av1:'AV1', aac:'AAC', opus:'Opus',
+                mp3:'MP3', flac:'FLAC', ac3:'AC-3', eac3:'E-AC-3', vorbis:'Vorbis', dts:'DTS'};
+  function codecName(c){ return CODECS[c] || (c ? String(c).toUpperCase() : 'ไม่ทราบชนิด'); }
+  function isMkv(it){ return !!(it && it.kind === 'file' && it.file && /\.(mkv|mk3d)$/i.test(it.name)); }
+  function playable(type){
+    try { if (window.MediaSource && MediaSource.isTypeSupported(type)) return true; } catch(e){}
+    return video.canPlayType(type) !== '';
+  }
+  function loadMb(){
+    if (!mbLoad) mbLoad = import(MB_URL).catch(function(e){ mbLoad = null; throw e; });
+    return mbLoad;
+  }
+  function busy(title, msg){
+    $('#busytitle').textContent = title; $('#busymsg').textContent = msg || ''; $('#busy').hidden = false;
+  }
+  function showToast(msg){
+    qHint.textContent = msg;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ if (qHint.textContent === msg) qHint.textContent = ''; }, 10000);
+  }
+  function cancelRemux(){
+    var job = remuxJob;
+    remuxJob = null; $('#busy').hidden = true;
+    if (!job) return;
+    job.cancelled = true;
+    if (job.conv) job.conv.cancel().catch(function(){});
+  }
+  function dropRemux(it){
+    if (it.remuxUrl){ URL.revokeObjectURL(it.remuxUrl); delete it.remuxUrl; }
+  }
+  function UserError(msg){ this.userMsg = msg; }
+  function trackLabel(t, i){
+    return Promise.all([t.getLanguageCode(), t.getName(), t.getNumberOfChannels()]).then(function(m){
+      var ch = m[2] > 2 ? (m[2] - 1) + '.1' : m[2] === 2 ? 'สเตอริโอ' : m[2] === 1 ? 'โมโน' : '';
+      return [m[1] || LANGS[m[0]] || (m[0] && m[0] !== 'und' ? m[0] : 'แทร็ก ' + (i + 1)), codecName(t.codec), ch]
+        .filter(Boolean).join(' · ');
+    });
+  }
+  function remux(it, resumeAt, paused){
+    cancelRemux(); stop(); clearError();
+    var job = {cancelled:false, conv:null}, MB, vt, chosen;
+    remuxJob = job;
+    busy('กำลังเตรียมไฟล์ MKV…', 'แปลงในเครื่องนี้เท่านั้น ไม่มีการอัปโหลด');
+    function alive(){ if (job.cancelled) throw {cancelled:true}; }
+    loadMb().catch(function(){
+      throw new UserError('โหลดตัวแปลงไฟล์ไม่สำเร็จ ต้องต่ออินเทอร์เน็ตในครั้งแรกที่เปิดไฟล์ MKV');
+    }).then(function(mod){
+      alive(); MB = mod;
+      var input = new MB.Input({source:new MB.BlobSource(it.file), formats:MB.ALL_FORMATS});
+      return Promise.all([input, input.getPrimaryVideoTrack(), input.getAudioTracks(), input.getPrimaryAudioTrack()]);
+    }).then(function(r){
+      alive();
+      var input = r[0], ats = r[2];
+      vt = r[1];
+      if (!vt) throw new UserError('ไม่พบภาพในไฟล์นี้');
+      if (typeof it.audioSel !== 'number' || !ats[it.audioSel]) it.audioSel = Math.max(0, ats.indexOf(r[3]));
+      chosen = ats[it.audioSel] || null;
+      return Promise.all([vt.getCodecParameterString(), Promise.all(ats.map(trackLabel))]).then(function(x){
+        alive();
+        it.audioLabels = x[1]; syncAudio();
+        if (!x[0] || !playable('video/mp4; codecs="' + x[0] + '"')){
+          throw new UserError(vt.codec === 'hevc'
+            ? 'เครื่องหรือเบราว์เซอร์นี้ถอดรหัสวิดีโอ HEVC (H.265) ไม่ได้ ต้องมีการ์ดจอหรือชิปที่ถอดรหัส HEVC ได้ — บน Windows ลอง Chrome เวอร์ชันล่าสุด หรือ Edge ที่ติดตั้ง HEVC Video Extensions หรือแปลงไฟล์เป็น H.264 ด้วยโปรแกรมอย่าง HandBrake'
+            : 'เบราว์เซอร์นี้ไม่รองรับวิดีโอแบบ ' + codecName(vt.codec));
+        }
+        return input;
+      });
+    }).then(function(input){
+      var parts = [], folded = new Blob([]), pending = 0, written = 0;
+      var target = new MB.StreamTarget(new WritableStream({
+        write: function(ch){
+          if (ch.position !== written) throw new Error('non-sequential write');
+          parts.push(ch.data); written += ch.data.byteLength; pending += ch.data.byteLength;
+          // Fold into a Blob regularly so the browser can move the bytes out of the JS heap.
+          if (pending >= 67108864){ folded = new Blob([folded].concat(parts)); parts = []; pending = 0; }
+        }
+      }), {chunked:true});
+      var output = new MB.Output({format:new MB.Mp4OutputFormat({fastStart:'fragmented'}), target:target});
+      return MB.Conversion.init({
+        input:input, output:output, showWarnings:false,
+        video:function(t){ return t === vt ? {} : {discard:true}; },
+        audio:function(t){
+          if (t !== chosen) return {discard:true};
+          return t.getCodecParameterString().then(function(ac){
+            return ac && playable('audio/mp4; codecs="' + ac + '"') ? {} : {codec:'aac', forceTranscode:true};
+          });
+        }
+      }).then(function(conv){
+        alive();
+        job.conv = conv;
+        if (conv.utilizedTracks.indexOf(vt) < 0) throw new UserError('ย้ายภาพจากไฟล์นี้ไม่ได้');
+        conv.onProgress = function(p){
+          if (!job.cancelled) busy('กำลังแปลง MKV เป็น MP4… ' + Math.floor(p * 100) + '%',
+            'ย้ายภาพและเสียงใส่ไฟล์ใหม่ในหน่วยความจำ ไม่บีบอัดซ้ำ ไม่มีการอัปโหลด');
+        };
+        var noAudio = !!chosen && conv.utilizedTracks.indexOf(chosen) < 0;
+        return conv.execute().then(function(){
+          alive();
+          return {blob:new Blob([folded].concat(parts), {type:'video/mp4'}), noAudio:noAudio};
+        });
+      });
+    }).then(function(res){
+      remuxJob = null; $('#busy').hidden = true;
+      dropRemux(it);
+      it.remuxUrl = URL.createObjectURL(res.blob);
+      video.src = it.remuxUrl;
+      video.playbackRate = Number($('#speed').value);
+      if (resumeAt > 0) video.addEventListener('loadedmetadata', function seek(){
+        video.removeEventListener('loadedmetadata', seek);
+        if (list[cur] === it) video.currentTime = resumeAt;
+      });
+      if (!paused){ var p = video.play(); if (p && p.catch) p.catch(function(){}); }
+      render(); meta();
+      showToast(res.noAudio
+        ? 'ไม่มีเสียง: เบราว์เซอร์นี้เล่นเสียงแบบ ' + codecName(chosen.codec) + ' ไม่ได้ ลองเลือกแทร็กเสียงอื่น'
+        : 'แปลง MKV เป็น MP4 ในเครื่องแล้ว (ภาพ ' + codecName(vt.codec) + ')');
+    }).catch(function(e){
+      if (job.cancelled || (e && e.cancelled)) return;
+      remuxJob = null; $('#busy').hidden = true;
+      it.remuxFailed = true;
+      showError(e && e.userMsg ? e.userMsg : 'แปลงไฟล์ MKV นี้ไม่สำเร็จ ไฟล์อาจเสียหายหรือใช้รูปแบบที่ไม่รองรับ');
+      if (!(e && e.userMsg) && window.console) console.error(e);
+    });
+  }
+  function syncAudio(){
+    var it = list[cur], sel = $('#audio'), labels = it && it.audioLabels;
+    $('#audiofield').hidden = !(labels && labels.length > 1);
+    if ($('#audiofield').hidden) return;
+    sel.innerHTML = '';
+    labels.forEach(function(l, i){
+      var o = document.createElement('option'); o.value = String(i); o.textContent = l; sel.appendChild(o);
+    });
+    sel.value = String(it.audioSel || 0);
+  }
+  $('#audio').onchange = function(){
+    var it = list[cur];
+    if (!it) return;
+    it.audioSel = Number(this.value);
+    var t = video.currentTime, paused = video.paused;
+    dropRemux(it); it.remuxFailed = false;
+    remux(it, t, paused);
+  };
+
   /* ---------- playlist ---------- */
   function fmtSize(b){
     return b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(1) + ' MB';
@@ -485,7 +655,7 @@
       n.textContent = i === cur ? '▶' : String(i + 1);
       var t = document.createElement('span'); t.className = 't'; t.textContent = it.name;
       var k = document.createElement('span'); k.className = 'k';
-      k.textContent = (it.kind === 'file' ? 'ไฟล์ในเครื่อง · ' + fmtSize(it.size)
+      k.textContent = (it.kind === 'file' ? 'ไฟล์ในเครื่อง · ' + fmtSize(it.size) + (it.remuxUrl ? ' · แปลงเป็น MP4' : '')
                     : it.kind === 'hls' ? 'สตรีม HLS' : 'ลิงก์วิดีโอ') + (it.sub ? ' · มีซับ' : '');
       t.appendChild(k);
       var x = document.createElement('button'); x.className = 'x'; x.textContent = '✕';
@@ -503,13 +673,15 @@
     var wasCurrent = i === cur;
     list.splice(i, 1);
     if (wasCurrent){
-      stop();
+      cancelRemux(); stop();
       if (it.kind === 'file') URL.revokeObjectURL(it.url);
+      dropRemux(it);
       cur = -1;
       if (list.length) play(Math.min(i, list.length - 1));
-      else { $('#blank').hidden = false; clearError(); setQuality('none'); meta(); render(); syncSub(); }
+      else { $('#blank').hidden = false; clearError(); setQuality('none'); meta(); render(); syncSub(); syncAudio(); }
     } else {
       if (it.kind === 'file') URL.revokeObjectURL(it.url);
+      dropRemux(it);
       if (i < cur) cur--;
       render();
     }
@@ -518,7 +690,7 @@
     var first = list.length, added = 0;
     Array.prototype.forEach.call(files, function(f){
       if (!(f.type.indexOf('video/') === 0 || /\.(mp4|m4v|webm|mov|mkv|ogv|avi|ts)$/i.test(f.name))) return;
-      list.push({id:++uid, name:f.name, kind:'file', url:URL.createObjectURL(f), size:f.size});
+      list.push({id:++uid, name:f.name, kind:'file', url:URL.createObjectURL(f), size:f.size, file:f});
       added++;
     });
     if (!added) return;
