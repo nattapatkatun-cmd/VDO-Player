@@ -1,10 +1,11 @@
 /* Service worker: caches only the app itself (page, manifest, icons, hls.js, fonts)
    so the player opens offline. Video files, subtitles and stream URLs are never
    intercepted or stored — local files play from blob: URLs that bypass this worker. */
-var VERSION = 'vp-v1';
+var VERSION = 'vp-v2';
 var SHELL = ['./', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
              'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 var HLS_JS = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js';
+var MEDIABUNNY = 'https://cdn.jsdelivr.net/npm/mediabunny@1.60.0/dist/bundles/mediabunny.min.mjs';
 var FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 var scope = self.registration.scope;
@@ -59,6 +60,6 @@ self.addEventListener('fetch', function(e){
   }
   var bare = url.origin + url.pathname;
   if (shellUrls.indexOf(bare) >= 0){ e.respondWith(staleWhileRevalidate(e, bare)); return; }
-  if (req.url === HLS_JS || FONT_HOSTS.indexOf(url.hostname) >= 0){ e.respondWith(staleWhileRevalidate(e)); return; }
+  if (req.url === HLS_JS || req.url === MEDIABUNNY || FONT_HOSTS.indexOf(url.hostname) >= 0){ e.respondWith(staleWhileRevalidate(e)); return; }
   // Everything else (videos, streams, subtitles) goes straight to the network.
 });
